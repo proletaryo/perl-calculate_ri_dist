@@ -6,6 +6,11 @@ use warnings;
 my $href_Data             = {};
 my $href_EC2RICostSummary = {};
 
+# TODO:
+# - handle multi-region
+# - handle both RDS and EC2
+# - distinction between different OS types
+
 while (<>) {
   chomp;
 
@@ -22,7 +27,7 @@ while (<>) {
   my $CostCodeCategory  = _extract_data( $_, 32 );    # CostCodeCategory
 
   # Get all RIs
-  if ( $_ =~ /Smart.+${f_ProductCode}.+${f_UsageType}.+hourly fee/ ) {
+  if ( $_ =~ /Smart.+${f_ProductCode}.+HeavyUsage.+hourly fee/ ) {
 
     my ( $RegionUsageType, undef ) = split( /:/, $UsageType );
     my $RIPurchasedType = _get_RI_purchased_type($_);
@@ -87,37 +92,48 @@ while (<>) {
 }
 
 # calculate cost distribution
-# TODO:
-# - handle both RDS and EC2
-# - handle multi-regions
 my $ProductCode     = 'AmazonEC2';
 my $RegionUsageType = 'APS1-BoxUsage';
 
-if ( exists( $href_Data->{'BoxUsage'}->{'AmazonEC2'}->{$RegionUsageType} ) ) {
-  my $href_p = $href_Data->{'BoxUsage'}->{'AmazonEC2'}->{$RegionUsageType};
-  for my $k0 ( keys %{$href_p} )    # InstanceType
+if ( exists( $href_Data->{'BoxUsage'}->{'AmazonEC2'} ) ) {
+  for
+    my $k_RegionUsageType ( keys %{ $href_Data->{'BoxUsage'}->{'AmazonEC2'} } )
   {
-    for my $k1 ( keys %{ $href_p->{$k0} } ) {
-      my $refX = $href_p->{$k0}->{$k1};
-      my $refY =
-        $href_Data->{'RawUsage'}->{$ProductCode}->{$RegionUsageType}->{$k0};
-      my $UsedPercentage =
-        $refX->{'UsageQuantity'} / $refY->{'SumUsageQuantity'};
-      my $ActualCost =
-        $href_Data->{'HeavyUsage'}->{$ProductCode}->{'APS1-HeavyUsage'}->{$k0}
-        ->{'SumTotalCost'} * $UsedPercentage;
+    my $href_p = $href_Data->{'BoxUsage'}->{'AmazonEC2'}->{$k_RegionUsageType};
+    for my $k0 ( keys %{$href_p} )    # InstanceType
+    {
+      my $RegionCode = undef;
+      my $HURegionUsageType = 'HeavyUsage';
 
-      my $key = $k1;
-      $refY->{'Breakdown'}->{$key}->{'UsedPercentage'} = $UsedPercentage;
-      $refY->{'Breakdown'}->{$key}->{'ActualCost'}     = $ActualCost;
-
-      # put in summary
-      if ( exists( $href_EC2RICostSummary->{$key} ) ) {
-        $href_EC2RICostSummary->{$key} =
-          $href_EC2RICostSummary->{$key} + $ActualCost;
+      # handle US-East RegionUsageType idiosyncracy
+      if ($k_RegionUsageType =~ /^(.+)-.+/) {
+        $RegionCode = $1;
+        $HURegionUsageType = join('-', $RegionCode, $HURegionUsageType);
       }
-      else {
-        $href_EC2RICostSummary->{$key} = $ActualCost;
+
+      for my $k1 ( keys %{ $href_p->{$k0} } ) {
+        my $refX = $href_p->{$k0}->{$k1};
+        my $refY =
+          $href_Data->{'RawUsage'}->{$ProductCode}->{$k_RegionUsageType}->{$k0};
+        my $UsedPercentage =
+          $refX->{'UsageQuantity'} / $refY->{'SumUsageQuantity'};
+
+        my $ActualCost =
+          $href_Data->{'HeavyUsage'}->{$ProductCode}->{$HURegionUsageType}
+          ->{$k0}->{'SumTotalCost'} * $UsedPercentage;
+
+        my $key = $k1;
+        $refY->{'Breakdown'}->{$key}->{'UsedPercentage'} = $UsedPercentage;
+        $refY->{'Breakdown'}->{$key}->{'ActualCost'}     = $ActualCost;
+
+        # put in summary
+        if ( exists( $href_EC2RICostSummary->{$key} ) ) {
+          $href_EC2RICostSummary->{$key} =
+            $href_EC2RICostSummary->{$key} + $ActualCost;
+        }
+        else {
+          $href_EC2RICostSummary->{$key} = $ActualCost;
+        }
       }
     }
   }
@@ -125,6 +141,7 @@ if ( exists( $href_Data->{'BoxUsage'}->{'AmazonEC2'}->{$RegionUsageType} ) ) {
 
 print 'done';
 
+# sub functions
 sub _extract_data {
   my ( $d, $i ) = @_;
   my $type = undef;
@@ -132,7 +149,9 @@ sub _extract_data {
   # get the instance type string
   my @a = split( /","/, $d );
 
-  $type = $a[$i];
+  if ($type = $a[$i]) {
+    $type =~ s/(^"|"$)//;
+  }
 
   return $type;
 }
