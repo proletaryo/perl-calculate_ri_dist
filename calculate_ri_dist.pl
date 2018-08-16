@@ -20,26 +20,27 @@ while (<>) {
     my $UsageQuantity = _extract_data( $_, 22 );    # UsageQuantity
     my $TotalCost     = _extract_data( $_, 29 );    # TotalCost
 
+    my ( $RegionUsageType, undef ) = split( /:/, $UsageType );
+    my $RIPurchasedType = _get_RI_purchased_type($_);
+
     my $cur_SumUsageQuantity =
-      exists( $href_Data->{'HeavyUsage'}->{$ProductCode}->{$UsageType}
-        ->{'SumUsageQuantity'} )
-      ? $href_Data->{'HeavyUsage'}->{$ProductCode}->{$UsageType}
-      ->{'SumUsageQuantity'}
+      exists( $href_Data->{'HeavyUsage'}->{$RegionUsageType}->{$ProductCode}
+        ->{$RIPurchasedType}->{'SumUsageQuantity'} )
+      ? $href_Data->{'HeavyUsage'}->{$RegionUsageType}->{$ProductCode}
+      ->{$RIPurchasedType}->{'SumUsageQuantity'}
       : 0;
-    $href_Data->{'HeavyUsage'}->{$ProductCode}->{$UsageType}
-      ->{'SumUsageQuantity'} = $cur_SumUsageQuantity + $UsageQuantity;
+    $href_Data->{'HeavyUsage'}->{$RegionUsageType}->{$ProductCode}
+      ->{$RIPurchasedType}->{'SumUsageQuantity'} =
+      $cur_SumUsageQuantity + $UsageQuantity;
 
     my $cur_SumTotalCost =
-      exists(
-      $href_Data->{'HeavyUsage'}->{$ProductCode}->{$UsageType}->{'SumTotalCost'}
-      )
-      ? $href_Data->{'HeavyUsage'}->{$ProductCode}->{$UsageType}
-      ->{'SumTotalCost'}
+      exists( $href_Data->{'HeavyUsage'}->{$RegionUsageType}->{$ProductCode}
+        ->{$RIPurchasedType}->{'SumTotalCost'} )
+      ? $href_Data->{'HeavyUsage'}->{$RegionUsageType}->{$ProductCode}
+      ->{$RIPurchasedType}->{'SumTotalCost'}
       : 0;
-    $href_Data->{'HeavyUsage'}->{$ProductCode}->{$UsageType}->{'SumTotalCost'}
-      = $cur_SumTotalCost + $TotalCost;
-
-    # print $UsageType . "\n";
+    $href_Data->{'HeavyUsage'}->{$RegionUsageType}->{$ProductCode}
+      ->{$RIPurchasedType}->{'SumTotalCost'} = $cur_SumTotalCost + $TotalCost;
   }
 
   # Get all usage that consumed RIs
@@ -94,6 +95,18 @@ sub _get_RI_applied_type {
 
   my $ItemDescription = _extract_data( $d, 19 );
   if ( $ItemDescription =~ /, (.+) reserved instance applied/ ) {
+    $value = $1;
+  }
+
+  return $value;
+}
+
+sub _get_RI_purchased_type {
+  my $d     = shift @_;
+  my $value = undef;
+
+  my $ItemDescription = _extract_data( $d, 19 );
+  if ( $ItemDescription =~ /, (.+) instance/ ) {
     $value = $1;
   }
 
