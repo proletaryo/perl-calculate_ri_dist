@@ -3,7 +3,8 @@
 use strict;
 use warnings;
 
-my $href_Data = {};
+my $href_Data             = {};
+my $href_EC2RICostSummary = {};
 
 while (<>) {
   chomp;
@@ -52,21 +53,24 @@ while (<>) {
     my ( $RegionUsageType, undef ) = split( /:/, $UsageType );
     my $RIAppliedType = _get_RI_applied_type($_);
 
+    my $key =
+      join( ':', $LinkedAccountId, $LinkedAccountName, $CostCodeCategory );
+
     $href_Data->{'BoxUsage'}->{$ProductCode}->{$RegionUsageType}
-      ->{$RIAppliedType}->{$LinkedAccountId}->{'CostCodeCategory'} =
-      $CostCodeCategory;
+      ->{$RIAppliedType}->{$key}->{'LinkedAccountId'} = $LinkedAccountId;
     $href_Data->{'BoxUsage'}->{$ProductCode}->{$RegionUsageType}
-      ->{$RIAppliedType}->{$LinkedAccountId}->{'LinkedAccountName'} =
-      $LinkedAccountName;
+      ->{$RIAppliedType}->{$key}->{'LinkedAccountName'} = $LinkedAccountName;
+    $href_Data->{'BoxUsage'}->{$ProductCode}->{$RegionUsageType}
+      ->{$RIAppliedType}->{$key}->{'CostCodeCategory'} = $CostCodeCategory;
 
     my $cur_UsageQuantity =
       exists( $href_Data->{'BoxUsage'}->{$ProductCode}->{$RegionUsageType}
-        ->{$RIAppliedType}->{$LinkedAccountId}->{'UsageQuantity'} )
+        ->{$RIAppliedType}->{$key}->{'UsageQuantity'} )
       ? $href_Data->{'BoxUsage'}->{$ProductCode}->{$RegionUsageType}
-      ->{$RIAppliedType}->{$LinkedAccountId}->{'UsageQuantity'}
+      ->{$RIAppliedType}->{$key}->{'UsageQuantity'}
       : 0;
     $href_Data->{'BoxUsage'}->{$ProductCode}->{$RegionUsageType}
-      ->{$RIAppliedType}->{$LinkedAccountId}->{'UsageQuantity'} =
+      ->{$RIAppliedType}->{$key}->{'UsageQuantity'} =
       $cur_UsageQuantity + $UsageQuantity;
 
     # calculate the total UsageQuantity per InstanceType
@@ -83,18 +87,41 @@ while (<>) {
 }
 
 # calculate cost distribution
-# href->RawUsage->APS1->InstanceType->DistUsageQuantity->LinkAccountId:CostCodeCategory
-if ( exists( $href_Data->{'BoxUsage'}->{'APS1-BoxUsage'} ) ) {
-  for my $k0 ( keys %{ $href_Data->{'BoxUsage'}->{'APS1-BoxUsage'} } )
-  {    # InstanceType
-    for my $k1 ( keys %{ $href_Data->{'BoxUsage'}->{'APS1-BoxUsage'}->{$k0} } )
-    {    # LinkedAccountId
+# TODO:
+# - handle both RDS and EC2
+# - handle multi-regions
+my $ProductCode     = 'AmazonEC2';
+my $RegionUsageType = 'APS1-BoxUsage';
+
+if ( exists( $href_Data->{'BoxUsage'}->{'AmazonEC2'}->{$RegionUsageType} ) ) {
+  my $href_p = $href_Data->{'BoxUsage'}->{'AmazonEC2'}->{$RegionUsageType};
+  for my $k0 ( keys %{$href_p} )    # InstanceType
+  {
+    for my $k1 ( keys %{ $href_p->{$k0} } ) {
+      my $refX = $href_p->{$k0}->{$k1};
+      my $refY =
+        $href_Data->{'RawUsage'}->{$ProductCode}->{$RegionUsageType}->{$k0};
+      my $UsedPercentage =
+        $refX->{'UsageQuantity'} / $refY->{'SumUsageQuantity'};
+      my $ActualCost =
+        $href_Data->{'HeavyUsage'}->{$ProductCode}->{'APS1-HeavyUsage'}->{$k0}
+        ->{'SumTotalCost'} * $UsedPercentage;
+
+      my $key = $k1;
+      $refY->{'Breakdown'}->{$key}->{'UsedPercentage'} = $UsedPercentage;
+      $refY->{'Breakdown'}->{$key}->{'ActualCost'}     = $ActualCost;
+
+      # put in summary
+      if ( exists( $href_EC2RICostSummary->{$key} ) ) {
+        $href_EC2RICostSummary->{$key} =
+          $href_EC2RICostSummary->{$key} + $ActualCost;
+      }
+      else {
+        $href_EC2RICostSummary->{$key} = $ActualCost;
+      }
     }
   }
 }
-
-# href->RICostDistribution->APS1->AmazonEC2->LinkAccountId->CostCodeCategory
-# href->RICostDistribution->APS1->AmazonEC2->LinkAccountId->DistributedCost
 
 print 'done';
 
