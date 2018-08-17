@@ -24,10 +24,16 @@ while (<>) {
   my $TotalCost         = _extract_data( $_, 29 );    # TotalCost
   my $CostCodeCategory  = _extract_data( $_, 32 );    # CostCodeCategory
 
-  # Get all RIs
-  if ( $_ =~ /Smart.+${f_ProductCode}.+HeavyUsage.+hourly fee/ ) {
+  if (not $UsageType) { next; }
 
-    my ( $RegionUsageType, undef ) = split( /:/, $UsageType );
+  # drop the instance type data, not relevant since RI applies to all
+  # type of instances under the same family (e.g. t2, m3, c4, etc.)
+  my ( $RegionUsageType, undef ) = split( /:/, $UsageType );
+
+  # Get all RIs
+  # if ( $_ =~ /Smart.+${f_ProductCode}.+HeavyUsage.+hourly fee/ ) {
+  if ( $_ =~ /Amazon(EC2|RDS).+HeavyUsage.+hourly fee/ ) {
+
     my $RIPurchasedType = _get_RI_purchased_type($_);
 
     my $cur_SumUsageQuantity =
@@ -51,9 +57,9 @@ while (<>) {
   }
 
   # Get all usage that consumed RIs
-  elsif ( $_ =~ /${f_ProductCode}.+BoxUsage.+reserved instance applied/ ) {
+  elsif ( $_ =~ /Amazon(EC2|RDS).+Usage.+reserved instance applied/ ) {
 
-    my ( $RegionUsageType, undef ) = split( /:/, $UsageType );
+    # get from the description
     my $RIAppliedType = _get_RI_applied_type($_);
 
     my $key =
