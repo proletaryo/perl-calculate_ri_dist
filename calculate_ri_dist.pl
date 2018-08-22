@@ -3,13 +3,14 @@
 use strict;
 use warnings;
 
-my $href_Data = {};
+my $href_Data                 = {};
+my $ColumnNumCostCodeCategory = 32;    # default
 
 # TODO:
 # - find the discrepancy on RDS, sum of distribution < actual cost
 
-# NOTE: 
-# - on UsageType: for US-East, region information is not included 
+# NOTE:
+# - on UsageType: for US-East, region information is not included
 #   (e.g. HeavyUsage only instead of SG's APS1-HeavyUsage)
 
 while (<>) {
@@ -21,8 +22,8 @@ while (<>) {
   my $UsageType         = _extract_data( $_, 15 );    # UsageType
   my $UsageQuantity     = _extract_data( $_, 22 );    # UsageQuantity
   my $TotalCost         = _extract_data( $_, 29 );    # TotalCost
-  # NOTE: for custom tags, the column location can change
-  my $CostCodeCategory  = _extract_data( $_, 32 );    # CostCodeCategory
+  my $CostCodeCategory =
+    _extract_data( $_, $ColumnNumCostCodeCategory );    # CostCodeCategory
 
   if ( not $UsageType ) { next; }
 
@@ -92,6 +93,15 @@ while (<>) {
       ->{$RIAppliedType}->{'SumUsageQuantity'} =
       $cur_SumUsageQuantity + $UsageQuantity;
   }
+
+  # figure out the column number of CostCodeCategory
+  elsif ( $_ =~ /user:CostCodeCategory/ ) {
+
+    # NOTE: for custom tags, the column location can change
+    if ( my $i = _getColumnIndex( $_, q/user:CostCodeCategory/ ) ) {
+      $ColumnNumCostCodeCategory = $i;
+    }
+  }
 }
 
 my $href_EC2RICostSummary = _calculateRICostSummary( $href_Data, 'AmazonEC2' );
@@ -147,13 +157,15 @@ sub _get_RI_purchased_type {
     # TODO: FIX HARD CODED STUFF!
     if (
       $ItemDescription =~
-      /^USD 0.0416 hourly fee per MySQL, db.t2.micro instance/        # verified
+      /^USD 0.0416 hourly fee per MySQL, db.t2.micro instance/    # verified
       or $ItemDescription =~
-      /^USD 0.0272 hourly fee per MySQL, db.t2.micro instance/        # verified
+      /^USD 0.0272 hourly fee per MySQL, db.t2.micro instance/    # verified
       or $ItemDescription =~
-      /^USD 0.169 hourly fee per MySQL, db.m3.medium instance/        # verified
+      /^USD 0.169 hourly fee per MySQL, db.m3.medium instance/    # verified
       or $ItemDescription =~
-      /^USD 0.364 hourly fee per MySQL, db.m4.large instance/         # verified
+      /^USD 0.364 hourly fee per MySQL, db.m4.large instance/     # verified
+      or $ItemDescription =~
+      /^USD 0.0448 hourly fee per PostgreSQL, db.t2.micro instance/ # verified, June 2018
       or $ItemDescription =~
       /^USD 0.178 hourly fee per PostgreSQL, db.m3.medium instance/   # verified
       or $ItemDescription =~
@@ -241,9 +253,55 @@ sub _calculateRICostSummary {
 }
 
 sub _print_href {
-  my ($prefix, $href) = @_;
+  my ( $prefix, $href ) = @_;
 
-  for my $key (keys %$href) {
-    print join(',', $prefix, $key, $href->{$key}) . "\n";
+  my $href_SummedData = {};
+
+  for my $key ( keys %$href ) {
+    my ( $AccountID, $AccountName, $CostCodeCategory ) = split( /:/, $key, 3 );
+
+    my $SummedKey = undef;
+
+    if ( $AccountID =~ /^(8537650344|6449474534|7453988156)/ ) {
+      if ($CostCodeCategory) {
+        $SummedKey = "CC:$AccountName:$CostCodeCategory";
+      }
+      else {    # NOTE: in shared account but untagged
+        $SummedKey = $AccountName;
+      }
+
+      if ( exists( $href_SummedData->{$SummedKey} ) ) {
+        $href_SummedData->{$SummedKey} =
+          $href_SummedData->{$SummedKey} + $href->{$key};
+      }
+      else {
+        $href_SummedData->{$SummedKey} = $href->{$key};
+      }
+    }
   }
+
+  # print header
+  print join( ',', 'Service', 'CostCodeCategory', 'Cost' ) . "\n";
+
+  for my $key ( keys %{$href_SummedData} ) {
+    print join( ',', $prefix, $key, $href_SummedData->{$key} ) . "\n";
+  }
+}
+
+sub _getColumnIndex {
+  my ( $d, $str_ToFind ) = @_;
+
+  my $value = undef;
+
+  my @headers = split( /","/, $_ );
+
+  for ( my $i = 0 ; $i < scalar @headers ; $i++ ) {
+    if ( $headers[$i] =~ /$str_ToFind/ ) {
+      $value = $i;
+      last;
+    }
+  }
+
+  return $value;
+
 }
