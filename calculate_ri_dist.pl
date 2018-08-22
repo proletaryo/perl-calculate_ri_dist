@@ -34,7 +34,8 @@ while (<>) {
   # Get all RIs
   if ( $_ =~ /Amazon(EC2|RDS).+HeavyUsage.+hourly fee/ ) {
 
-    my $RIPurchasedType = _get_RI_purchased_type($_);
+    my $ref = _get_RI_purchased_type($_);
+    my ( $RIPurchasedType, $HourlyPrice ) = ($ref->[0], $ref->[1]);
 
     my $cur_SumUsageQuantity =
       exists( $href_Data->{'HeavyUsage'}->{$ProductCode}->{$RegionUsageType}
@@ -107,6 +108,8 @@ while (<>) {
 my $href_EC2RICostSummary = _calculateRICostSummary( $href_Data, 'AmazonEC2' );
 my $href_RDSRICostSummary = _calculateRICostSummary( $href_Data, 'AmazonRDS' );
 
+# print header
+print join( ',', 'Service', 'CostCodeCategory', 'Cost' ) . "\n";
 _print_href( 'AmazonEC2', $href_EC2RICostSummary );
 _print_href( 'AmazonRDS', $href_RDSRICostSummary );
 
@@ -150,8 +153,9 @@ sub _get_RI_purchased_type {
   my $value = undef;
 
   my $ItemDescription = _extract_data( $d, 19 );
-  if ( $ItemDescription =~ /per (.+), (.+) instance/ ) {
-    $value = "$2|$1";
+  if ( $ItemDescription =~ /USD (\d+\.\d+) hourly fee per (.+), (.+) instance/ ) {
+    my ($price, $ptype, $itype) = ($1, $2, $3);
+    $value = [ "$itype|$ptype", "$price" ];
 
     # mark if it's a RDS Multi-AZ RI
     # TODO: FIX HARD CODED STUFF!
@@ -176,7 +180,7 @@ sub _get_RI_purchased_type {
       /^USD 0.364 hourly fee per Oracle EE \(BYOL\), db.m4.large instance/ # verified
       )
     {
-      $value = "$value|MultiAZ";
+      $value->[0] = $value->[0] . "|MultiAZ";
     }
   }
 
@@ -269,21 +273,20 @@ sub _print_href {
       else {    # NOTE: in shared account but untagged
         $SummedKey = $AccountName;
       }
-
-      if ( exists( $href_SummedData->{$SummedKey} ) ) {
-        $href_SummedData->{$SummedKey} =
-          $href_SummedData->{$SummedKey} + $href->{$key};
-      }
-      else {
-        $href_SummedData->{$SummedKey} = $href->{$key};
-      }
+    }
+    else {
+      $SummedKey = $AccountName;
+    }
+    if ( exists( $href_SummedData->{$SummedKey} ) ) {
+      $href_SummedData->{$SummedKey} =
+        $href_SummedData->{$SummedKey} + $href->{$key};
+    }
+    else {
+      $href_SummedData->{$SummedKey} = $href->{$key};
     }
   }
 
-  # print header
-  print join( ',', 'Service', 'CostCodeCategory', 'Cost' ) . "\n";
-
-  for my $key ( keys %{$href_SummedData} ) {
+  for my $key ( sort keys %{$href_SummedData} ) {
     print join( ',', $prefix, $key, $href_SummedData->{$key} ) . "\n";
   }
 }
