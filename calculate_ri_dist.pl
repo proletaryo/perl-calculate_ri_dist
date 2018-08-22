@@ -6,15 +6,14 @@ use warnings;
 my $href_Data = {};
 
 # TODO:
-# - handle both RDS and EC2
-# - distinction between different OS types
+# - find the discrepancy on RDS, sum of distribution < actual cost
+
+# NOTE: 
+# - on UsageType: for US-East, region information is not included 
+#   (e.g. HeavyUsage only instead of SG's APS1-HeavyUsage)
 
 while (<>) {
   chomp;
-
-  # NOTE: for US-East, it's just HeavyUsage
-  my $f_ProductCode = 'AmazonEC2';
-  my $f_UsageType   = 'APS1-HeavyUsage';
 
   my $LinkedAccountId   = _extract_data( $_, 2 );     # LinkedAccountId
   my $LinkedAccountName = _extract_data( $_, 9 );     # LinkedAccountName
@@ -22,16 +21,16 @@ while (<>) {
   my $UsageType         = _extract_data( $_, 15 );    # UsageType
   my $UsageQuantity     = _extract_data( $_, 22 );    # UsageQuantity
   my $TotalCost         = _extract_data( $_, 29 );    # TotalCost
+  # NOTE: for custom tags, the column location can change
   my $CostCodeCategory  = _extract_data( $_, 32 );    # CostCodeCategory
 
-  if (not $UsageType) { next; }
+  if ( not $UsageType ) { next; }
 
   # drop the instance type data, not relevant since RI applies to all
   # type of instances under the same family (e.g. t2, m3, c4, etc.)
   my ( $RegionUsageType, undef ) = split( /:/, $UsageType );
 
   # Get all RIs
-  # if ( $_ =~ /Smart.+${f_ProductCode}.+HeavyUsage.+hourly fee/ ) {
   if ( $_ =~ /Amazon(EC2|RDS).+HeavyUsage.+hourly fee/ ) {
 
     my $RIPurchasedType = _get_RI_purchased_type($_);
@@ -95,8 +94,11 @@ while (<>) {
   }
 }
 
-my $href_EC2RICostSummary = _calculateRICostSummary($href_Data);
-print 'done';
+my $href_EC2RICostSummary = _calculateRICostSummary( $href_Data, 'AmazonEC2' );
+my $href_RDSRICostSummary = _calculateRICostSummary( $href_Data, 'AmazonRDS' );
+
+_print_href( 'AmazonEC2', $href_EC2RICostSummary );
+_print_href( 'AmazonRDS', $href_RDSRICostSummary );
 
 # sub functions
 sub _extract_data {
@@ -109,6 +111,9 @@ sub _extract_data {
   if ( $type = $a[$i] ) {
     $type =~ s/(^"|"$)//;
   }
+  else {
+    $type = '';
+  }
 
   return $type;
 }
@@ -118,8 +123,13 @@ sub _get_RI_applied_type {
   my $value = undef;
 
   my $ItemDescription = _extract_data( $d, 19 );
-  if ( $ItemDescription =~ /, (.+) reserved instance applied/ ) {
-    $value = $1;
+  my $UsageType       = _extract_data( $d, 15 );    # UsageType
+  if ( $ItemDescription =~ /^(.+), (.+) reserved instance applied/ ) {
+    $value = "$2|$1";
+
+    if ( $UsageType =~ /Multi-AZ/ ) {
+      $value = "$value|MultiAZ";
+    }
   }
 
   return $value;
@@ -130,8 +140,32 @@ sub _get_RI_purchased_type {
   my $value = undef;
 
   my $ItemDescription = _extract_data( $d, 19 );
-  if ( $ItemDescription =~ /, (.+) instance/ ) {
-    $value = $1;
+  if ( $ItemDescription =~ /per (.+), (.+) instance/ ) {
+    $value = "$2|$1";
+
+    # mark if it's a RDS Multi-AZ RI
+    # TODO: FIX HARD CODED STUFF!
+    if (
+      $ItemDescription =~
+      /^USD 0.0416 hourly fee per MySQL, db.t2.micro instance/        # verified
+      or $ItemDescription =~
+      /^USD 0.0272 hourly fee per MySQL, db.t2.micro instance/        # verified
+      or $ItemDescription =~
+      /^USD 0.169 hourly fee per MySQL, db.m3.medium instance/        # verified
+      or $ItemDescription =~
+      /^USD 0.364 hourly fee per MySQL, db.m4.large instance/         # verified
+      or $ItemDescription =~
+      /^USD 0.178 hourly fee per PostgreSQL, db.m3.medium instance/   # verified
+      or $ItemDescription =~
+      /^USD 0.38 hourly fee per PostgreSQL, db.m4.large instance/     # verified
+      or $ItemDescription =~
+      /^USD 0.169 hourly fee per Oracle EE \(BYOL\), db.m3.medium instance/ # verified
+      or $ItemDescription =~
+      /^USD 0.364 hourly fee per Oracle EE \(BYOL\), db.m4.large instance/ # verified
+      )
+    {
+      $value = "$value|MultiAZ";
+    }
   }
 
   return $value;
@@ -139,24 +173,25 @@ sub _get_RI_purchased_type {
 
 # calculate cost distribution
 sub _calculateRICostSummary {
-  my ($href_main) = @_;
+  my ( $href_main, $ProductCode ) = @_;
 
-  my $ref_value   = {};
-  my $ProductCode = 'AmazonEC2';
+  my $ref_value = {};
 
-  if ( exists( $href_main->{'BoxUsage'}->{'AmazonEC2'} ) ) {
+  # my $ProductCode = 'AmazonEC2';
+
+  if ( exists( $href_main->{'BoxUsage'}->{$ProductCode} ) ) {
     for my $k_RegionUsageType (
-      keys %{ $href_main->{'BoxUsage'}->{'AmazonEC2'} } )
+      keys %{ $href_main->{'BoxUsage'}->{$ProductCode} } )
     {
       my $href_p =
-        $href_main->{'BoxUsage'}->{'AmazonEC2'}->{$k_RegionUsageType};
+        $href_main->{'BoxUsage'}->{$ProductCode}->{$k_RegionUsageType};
       for my $k0 ( keys %{$href_p} )    # InstanceType
       {
         my $RegionCode        = undef;
         my $HURegionUsageType = 'HeavyUsage';
 
         # handle US-East RegionUsageType idiosyncracy
-        if ( $k_RegionUsageType =~ /^(.+)-.+/ ) {
+        if ( $k_RegionUsageType =~ /^(.{4})-.+/ ) {
           $RegionCode = $1;
           $HURegionUsageType = join( '-', $RegionCode, $HURegionUsageType );
         }
@@ -168,6 +203,19 @@ sub _calculateRICostSummary {
             ->{$k0};
           my $UsedPercentage =
             $refX->{'UsageQuantity'} / $refY->{'SumUsageQuantity'};
+
+          if (
+            not exists(
+              $href_main->{'HeavyUsage'}->{$ProductCode}->{$HURegionUsageType}
+                ->{$k0}->{'SumTotalCost'}
+            )
+            )
+          {
+            warn "Error: RI not found $ProductCode, "
+              . "UsageType: $HURegionUsageType, "
+              . "InstanceType: $k0\n";
+            next;
+          }
 
           my $ActualCost =
             $href_main->{'HeavyUsage'}->{$ProductCode}->{$HURegionUsageType}
@@ -190,4 +238,12 @@ sub _calculateRICostSummary {
   }
 
   return $ref_value;
+}
+
+sub _print_href {
+  my ($prefix, $href) = @_;
+
+  for my $key (keys %$href) {
+    print join(',', $prefix, $key, $href->{$key}) . "\n";
+  }
 }
